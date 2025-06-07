@@ -47,6 +47,30 @@ func (c *Client) doRequest(ctx context.Context, req *http.Request, out interface
 	return nil
 }
 
+func (c *Client) streamResponseToWriter(ctx context.Context, req *http.Request, w io.Writer) error {
+	req = req.WithContext(ctx)
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		data, _ := io.ReadAll(res.Body)
+		return &HTTPError{
+			StatusCode: res.StatusCode,
+			Body:       string(data),
+		}
+	}
+
+	_, err = io.Copy(w, res.Body)
+
+	return err
+
+}
+
 type HTTPError struct {
 	StatusCode int
 	Body       string

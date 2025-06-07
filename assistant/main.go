@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"time"
 
 	goaudio "github.com/go-audio/audio"
@@ -21,6 +22,9 @@ const (
 )
 
 func main() {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
 	openaiClient := openai.NewClient(os.Getenv("OPENAI_API_KEY"))
 
 	recorder, err := audio.NewAudioRecorder(sampleRate, numChannels)
@@ -28,9 +32,6 @@ func main() {
 		log.Fatalf("audio setup failed: %v", err)
 	}
 	defer recorder.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
 
 	runAssistant(ctx, openaiClient, recorder)
 }
@@ -40,6 +41,7 @@ func runAssistant(
 	openaiClient *openai.Client,
 	recorder audio.AudioRecorder,
 ) {
+	fmt.Println("Starting Recording...")
 	if err := recorder.Start(); err != nil {
 		log.Fatalf("could not start recorder: %v", err)
 		return
@@ -103,12 +105,34 @@ func runAssistant(
 	}
 	defer wavFileForUpload.Close()
 
+	fmt.Println("Calling Whisper for Speech to Text...")
 	whisperRes, err := openaiClient.TranscribeRawWAV(ctx, wavFileForUpload)
 	if err != nil {
 		log.Fatalf("error calling whisper model: %v", err)
 	}
+	fmt.Printf("Prompt: %s\n", whisperRes.Text)
 
-	fmt.Println("TRANSCRIPTION RESULTSSS:")
-	fmt.Println(whisperRes.Text)
+	fmt.Println("Calling ChatGPT API...")
+	chatRes, err := openaiClient.GetLLMResponse(ctx, whisperRes.Text)
+	if err != nil {
+		log.Fatalf("failed to call chat: %v", err)
+	}
+	fmt.Printf("ChatGPT Response: %s\n", *chatRes)
 
+	f, _ := os.Create("speech.mp3")
+	defer f.Close()
+
+	fmt.Println("Converting text to speech...")
+	if err := openaiClient.ConvertTextToSpeech(ctx, *chatRes, f); err != nil {
+		log.Fatalf("failed converting text to speech: %v", err)
+	}
+
+	cmd := exec.Command("mpg123", "-")
+	cmd.Stdin = f
+	cmd.Stdout = nil // or os.Stdout if you want logs
+	cmd.Stderr = nil
+
+	if err := cmd.Run(); err != nil {
+		log.Fatalf("playback failed: %v", err)
+	}
 }
